@@ -16,7 +16,10 @@ from pathlib import Path
 
 load_dotenv()
 
-SITE_ID = 1
+if os.getenv('HEROKU_APP_NAME'):
+    SITE_ID = 2
+else:
+    SITE_ID = 1
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
