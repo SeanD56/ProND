@@ -8,7 +8,7 @@ from django.db import IntegrityError
 from django.urls import reverse
 from django.utils import timezone
 from accounts.models import Skill
-from .models import Session, SessionMembership
+from .models import Session, SessionMembership, SessionMessage
 
 
 class SessionModelTest(TestCase):
@@ -121,6 +121,60 @@ class SessionMembershipModelTest(TestCase):
         self.assertEqual(SessionMembership.objects.filter(user=self.learner).count(), 2)
 
 
+class SessionMessageModelTest(TestCase):
+    def setUp(self):
+        self.host = User.objects.create_user(username='host', password='testpass123')
+        self.member = User.objects.create_user(username='member', password='testpass123')
+        self.outsider = User.objects.create_user(username='outsider', password='testpass123')
+        self.skill = Skill.objects.create(owner=self.host, name='Python')
+        self.session = Session.objects.create(
+            skill=self.skill,
+            host=self.host,
+            title='Python Basics',
+            location='Room 101',
+            date_time=timezone.now() + timedelta(days=1),
+            duration_minutes=60,
+            capacity=10,
+        )
+        SessionMembership.objects.create(session=self.session, user=self.member)
+
+    def test_member_can_send_standard_message(self):
+        message = SessionMessage.objects.create(
+            session=self.session,
+            author=self.member,
+            content='Looking forward to it',
+        )
+        self.assertFalse(message.is_announcement)
+
+    def test_outsider_cannot_send_message(self):
+        with self.assertRaises(ValidationError):
+            SessionMessage.objects.create(
+                session=self.session,
+                author=self.outsider,
+                content='Can I join the chat?',
+            )
+
+    def test_only_host_can_send_announcement(self):
+        with self.assertRaises(ValidationError):
+            SessionMessage.objects.create(
+                session=self.session,
+                author=self.member,
+                content='Room changed',
+                is_announcement=True,
+            )
+
+    def test_message_reports_edited_state(self):
+        message = SessionMessage.objects.create(
+            session=self.session,
+            author=self.member,
+            content='First draft',
+        )
+        message.content = 'Updated draft'
+        message.save()
+        message.refresh_from_db()
+        self.assertTrue(message.was_edited)
+
+
 class SessionListViewTest(TestCase):
     def setUp(self):
         self.client = Client()
@@ -222,6 +276,43 @@ class SessionDetailViewTest(TestCase):
         response = self.client.get(reverse('session_detail', args=[self.session.pk]))
         self.assertTrue(response.context['is_full'])
 
+    def test_session_detail_hides_chat_for_non_participants(self):
+        outsider = User.objects.create_user(username='outsider', password='testpass123')
+        self.client.login(username='outsider', password='testpass123')
+        response = self.client.get(reverse('session_detail', args=[self.session.pk]))
+        self.assertFalse(response.context['can_access_chat'])
+        self.assertContains(response, 'Join this session to view and send chat messages.')
+
+    def test_session_detail_shows_chat_for_members(self):
+        self.client.login(username='learner', password='testpass123')
+        SessionMembership.objects.create(session=self.session, user=self.learner)
+        SessionMessage.objects.create(
+            session=self.session,
+            author=self.host,
+            content='Bring your laptop',
+            is_announcement=True,
+        )
+        response = self.client.get(reverse('session_detail', args=[self.session.pk]))
+        self.assertTrue(response.context['can_access_chat'])
+        self.assertContains(response, 'Bring your laptop')
+        self.assertContains(response, 'Announcement')
+
+    def test_session_detail_shows_edit_controls_for_author_only(self):
+        SessionMembership.objects.create(session=self.session, user=self.learner)
+        learner_message = SessionMessage.objects.create(
+            session=self.session,
+            author=self.learner,
+            content='My question',
+        )
+        self.client.login(username='learner', password='testpass123')
+        response = self.client.get(reverse('session_detail', args=[self.session.pk]))
+        self.assertContains(response, reverse('session_message_edit', args=[self.session.pk, learner_message.pk]))
+        self.assertContains(response, reverse('session_message_delete', args=[self.session.pk, learner_message.pk]))
+
+        self.client.login(username='host', password='testpass123')
+        response = self.client.get(reverse('session_detail', args=[self.session.pk]))
+        self.assertNotContains(response, reverse('session_message_edit', args=[self.session.pk, learner_message.pk]))
+
 
 class SessionJoinViewTest(TestCase):
     def setUp(self):
@@ -316,3 +407,138 @@ class SessionLeaveViewTest(TestCase):
         self.client.login(username='learner', password='testpass123')
         response = self.client.post(reverse('session_leave', args=[self.session.pk]))
         self.assertEqual(response.status_code, 302)
+
+
+class SessionMessageCreateViewTest(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.host = User.objects.create_user(username='host', password='testpass123')
+        self.member = User.objects.create_user(username='member', password='testpass123')
+        self.outsider = User.objects.create_user(username='outsider', password='testpass123')
+        self.skill = Skill.objects.create(owner=self.host, name='Python')
+        self.session = Session.objects.create(
+            skill=self.skill,
+            host=self.host,
+            title='Python Basics',
+            location='Room 101',
+            date_time=timezone.now() + timedelta(days=1),
+            duration_minutes=60,
+            capacity=10,
+        )
+        SessionMembership.objects.create(session=self.session, user=self.member)
+
+    def test_member_can_post_chat_message(self):
+        self.client.login(username='member', password='testpass123')
+        response = self.client.post(reverse('session_message_create', args=[self.session.pk]), {
+            'content': 'Excited for the session',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(SessionMessage.objects.filter(
+            session=self.session,
+            author=self.member,
+            content='Excited for the session',
+            is_announcement=False,
+        ).exists())
+
+    def test_host_can_post_announcement(self):
+        self.client.login(username='host', password='testpass123')
+        response = self.client.post(reverse('session_message_create', args=[self.session.pk]), {
+            'content': 'Please arrive 10 minutes early',
+            'is_announcement': 'on',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(SessionMessage.objects.filter(
+            session=self.session,
+            author=self.host,
+            is_announcement=True,
+        ).exists())
+
+    def test_member_cannot_escalate_message_to_announcement(self):
+        self.client.login(username='member', password='testpass123')
+        self.client.post(reverse('session_message_create', args=[self.session.pk]), {
+            'content': 'This should not become an announcement',
+            'is_announcement': 'on',
+        })
+        message = SessionMessage.objects.get(author=self.member)
+        self.assertFalse(message.is_announcement)
+
+    def test_outsider_cannot_post_message(self):
+        self.client.login(username='outsider', password='testpass123')
+        response = self.client.post(reverse('session_message_create', args=[self.session.pk]), {
+            'content': 'Let me in',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SessionMessage.objects.filter(content='Let me in').exists())
+
+
+class SessionMessageManageViewTest(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.host = User.objects.create_user(username='host', password='testpass123')
+        self.member = User.objects.create_user(username='member', password='testpass123')
+        self.other_member = User.objects.create_user(username='othermember', password='testpass123')
+        self.skill = Skill.objects.create(owner=self.host, name='Python')
+        self.session = Session.objects.create(
+            skill=self.skill,
+            host=self.host,
+            title='Python Basics',
+            location='Room 101',
+            date_time=timezone.now() + timedelta(days=1),
+            duration_minutes=60,
+            capacity=10,
+        )
+        SessionMembership.objects.create(session=self.session, user=self.member)
+        SessionMembership.objects.create(session=self.session, user=self.other_member)
+        self.message = SessionMessage.objects.create(
+            session=self.session,
+            author=self.member,
+            content='Original message',
+        )
+
+    def test_author_can_edit_message(self):
+        self.client.login(username='member', password='testpass123')
+        response = self.client.post(reverse('session_message_edit', args=[self.session.pk, self.message.pk]), {
+            'content': 'Edited message',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.content, 'Edited message')
+        self.assertTrue(self.message.was_edited)
+
+    def test_non_author_cannot_edit_message(self):
+        self.client.login(username='othermember', password='testpass123')
+        response = self.client.post(reverse('session_message_edit', args=[self.session.pk, self.message.pk]), {
+            'content': 'Hijacked edit',
+        })
+        self.assertEqual(response.status_code, 403)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.content, 'Original message')
+
+    def test_author_can_delete_message(self):
+        self.client.login(username='member', password='testpass123')
+        response = self.client.post(reverse('session_message_delete', args=[self.session.pk, self.message.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SessionMessage.objects.filter(pk=self.message.pk).exists())
+
+    def test_non_author_cannot_delete_message(self):
+        self.client.login(username='othermember', password='testpass123')
+        response = self.client.post(reverse('session_message_delete', args=[self.session.pk, self.message.pk]))
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(SessionMessage.objects.filter(pk=self.message.pk).exists())
+
+    def test_host_can_edit_own_announcement(self):
+        announcement = SessionMessage.objects.create(
+            session=self.session,
+            author=self.host,
+            content='Initial announcement',
+            is_announcement=True,
+        )
+        self.client.login(username='host', password='testpass123')
+        response = self.client.post(reverse('session_message_edit', args=[self.session.pk, announcement.pk]), {
+            'content': 'Updated announcement',
+            'is_announcement': 'on',
+        })
+        self.assertEqual(response.status_code, 302)
+        announcement.refresh_from_db()
+        self.assertEqual(announcement.content, 'Updated announcement')
+        self.assertTrue(announcement.is_announcement)

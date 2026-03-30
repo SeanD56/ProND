@@ -5,9 +5,10 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
+from django.http import HttpResponseForbidden
 from accounts.models import Skill
-from .models import Session, SessionMembership
-from .forms import SessionForm
+from .models import Session, SessionMembership, SessionMessage
+from .forms import SessionForm, SessionMessageForm, SessionMessageEditForm
 
 
 @login_required
@@ -50,21 +51,32 @@ def session_detail(request, pk): # view session details. conditional buttons bas
         pk=pk
     )
     memberships = session.memberships.select_related('user')
+    session_messages = session.messages.select_related('author')
     membership_count = memberships.count()
 
     is_host = request.user == session.host
     is_member = memberships.filter(user=request.user).exists()
     is_full = membership_count >= session.capacity
     is_past = session.date_time < timezone.now()
+    can_access_chat = session.user_can_access_chat(request.user)
+
+    message_form = None
+    if can_access_chat:
+        message_form = SessionMessageForm()
+        if not session.user_can_post_announcement(request.user):
+            message_form.fields['is_announcement'].widget = message_form.fields['is_announcement'].hidden_widget()
 
     return render(request, 'sessions/session_detail.html', {
         'session': session,
         'memberships': memberships,
+        'session_messages': session_messages,
         'membership_count': membership_count,
         'is_host': is_host,
         'is_member': is_member,
         'is_full': is_full,
         'is_past': is_past,
+        'can_access_chat': can_access_chat,
+        'message_form': message_form,
     })
 
 
@@ -112,5 +124,88 @@ def session_leave(request, pk): # POST only - leave session as member
         messages.success(request, f'You left "{session.title}".')
     else:
         messages.info(request, 'You are not a member of this session.')
+
+    return redirect('session_detail', pk=pk)
+
+
+@login_required
+def session_message_create(request, pk):
+    session = get_object_or_404(Session.objects.select_related('host'), pk=pk)
+
+    if request.method != 'POST':
+        return redirect('session_detail', pk=pk)
+
+    if not session.user_can_access_chat(request.user):
+        messages.error(request, 'Join this session before using the chat.')
+        return redirect('session_detail', pk=pk)
+
+    form = SessionMessageForm(request.POST)
+    if not session.user_can_post_announcement(request.user):
+        form.data = form.data.copy()
+        form.data['is_announcement'] = ''
+
+    if form.is_valid():
+        session_message = form.save(commit=False)
+        session_message.session = session
+        session_message.author = request.user
+        session_message.save()
+        if session_message.is_announcement:
+            messages.success(request, 'Announcement posted.')
+        else:
+            messages.success(request, 'Message sent.')
+    else:
+        errors = ' '.join(form.errors.get('content', [])) or 'Please enter a valid message.'
+        messages.error(request, errors)
+
+    return redirect('session_detail', pk=pk)
+
+
+@login_required
+def session_message_edit(request, pk, message_id):
+    session_message = get_object_or_404(
+        SessionMessage.objects.select_related('session', 'session__host', 'author'),
+        pk=message_id,
+        session_id=pk,
+    )
+
+    if not session_message.user_can_manage(request.user):
+        return HttpResponseForbidden('You can only edit your own messages.')
+
+    if request.method == 'POST':
+        form = SessionMessageEditForm(request.POST, instance=session_message)
+        if not session_message.session.user_can_post_announcement(request.user):
+            form.data = form.data.copy()
+            form.data['is_announcement'] = ''
+
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Message updated.')
+            return redirect('session_detail', pk=pk)
+    else:
+        form = SessionMessageEditForm(instance=session_message)
+        if not session_message.session.user_can_post_announcement(request.user):
+            form.fields['is_announcement'].widget = form.fields['is_announcement'].hidden_widget()
+
+    return render(request, 'sessions/session_message_edit.html', {
+        'session': session_message.session,
+        'session_message': session_message,
+        'form': form,
+    })
+
+
+@login_required
+def session_message_delete(request, pk, message_id):
+    session_message = get_object_or_404(
+        SessionMessage.objects.select_related('session', 'author'),
+        pk=message_id,
+        session_id=pk,
+    )
+
+    if not session_message.user_can_manage(request.user):
+        return HttpResponseForbidden('You can only delete your own messages.')
+
+    if request.method == 'POST':
+        session_message.delete()
+        messages.success(request, 'Message deleted.')
 
     return redirect('session_detail', pk=pk)
