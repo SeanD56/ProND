@@ -1,5 +1,5 @@
 from django import forms
-from .models import Session
+from .models import Session, SessionMessage
 
 
 class SessionForm(forms.ModelForm): # form for creating/editing sessions - all fields except host, which is autoset in views
@@ -17,4 +17,39 @@ class SessionForm(forms.ModelForm): # form for creating/editing sessions - all f
         }
         labels = {
             'duration_minutes': 'Duration (minutes)', # better label for duration field - decided to use minutes, happy to change
+        }
+
+
+class SessionMessageForm(forms.ModelForm):
+    class Meta:
+        model = SessionMessage
+        fields = ['content', 'is_announcement']
+        widgets = {
+            'content': forms.Textarea(attrs={
+                'rows': 3,
+                'class': 'form-control',
+                'placeholder': 'Write a message to the session...',
+            }),
+            'is_announcement': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+        labels = {
+            'content': 'Message',
+            'is_announcement': 'Post as host announcement',
+        }
+
+
+class SessionMessageEditForm(forms.ModelForm):
+    class Meta:
+        model = SessionMessage
+        fields = ['content', 'is_announcement']
+        widgets = {
+            'content': forms.Textarea(attrs={
+                'rows': 4,
+                'class': 'form-control',
+            }),
+            'is_announcement': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+        labels = {
+            'content': 'Message',
+            'is_announcement': 'Keep as host announcement',
         }
