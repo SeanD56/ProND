@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Message â€” ProND{% endblock %}
+
+{% block content %}
+<h2>Edit Message</h2>
+<p class="text-muted">
+    Back to
+    <a href="{% url 'session_detail' session.pk %}">{{ session.title }}</a>
+</p>
+
+<form method="post" class="mt-4">
+    {% csrf_token %}
+    <div class="mb-3">
+        {{ form.content.label_tag }}
+        {{ form.content }}
+        {% if form.content.errors %}
+            <div class="text-danger small">{{ form.content.errors|join:", " }}</div>
+        {% endif %}
+    </div>
+
+    {% if form.is_announcement.is_hidden %}
+        {{ form.is_announcement }}
+    {% else %}
+        <div class="form-check mb-3">
+            {{ form.is_announcement }}
+            {{ form.is_announcement.label_tag }}
+        </div>
+    {% endif %}
+
+    <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="{% url 'session_detail' session.pk %}" class="btn btn-outline-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}
