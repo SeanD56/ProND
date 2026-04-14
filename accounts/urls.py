@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    login_page, about_page, profile_view, profile_edit, profile_detail,
+    login_page, about_page, profile_view, profile_edit, profile_detail, send_message, profile_search, inbox,
     skill_search, session_request_create, session_request_cancel, session_requests_inbox, browse_sharers
 )
 
