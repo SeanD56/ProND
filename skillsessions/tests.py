@@ -224,6 +224,7 @@ class SessionListViewTest(TestCase):
         self.assertIn(target_session, response.context['sessions'])
         self.assertNotIn(other_session, response.context['sessions'])
         self.assertFalse(response.context['show_calendar'])
+        self.assertNotContains(response, 'id="calendar"', html=False)
 
     def test_sharer_session_list_hides_cancelled_sessions(self):
         self.client.login(username='testuser', password='testpass123')
