@@ -131,7 +131,7 @@ def skill_search(request):
         users = User.objects.filter(
             Q(username__icontains=query) |
             Q(profile__bio__icontains=query)
-        ).distinct()
+        ).exclude(id=request.user.id)
 
         # SKILLS
         skills = Skill.objects.filter(
@@ -146,7 +146,7 @@ def skill_search(request):
             is_cancelled=False,
             is_private=False,
             date_time__gte=timezone.now()
-        )
+        )#.exclude(host=request.user).select_related('skill', 'host')
 
         results["users"] = users
         results["skills"] = skills
